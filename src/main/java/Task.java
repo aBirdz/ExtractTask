@@ -10,10 +10,8 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -86,6 +84,15 @@ public class Task {
 
     }
 
+    private static String getInsertSql(Map<String, Object> data) {
+        String fields = StringUtils.join(data.keySet(), ",");
+        String[] ss = new String[data.size()];
+        Arrays.fill(ss, "?");
+        String val = StringUtils.join(ss, ",");
+        final String preSql = "insert into " + targetTable + "(" + fields + ") values (" + val + ")";
+        //System.out.println(preSql);
+        return preSql;
+    }
 
     private static class MyInsertTask extends TimerTask {
 
@@ -102,18 +109,24 @@ public class Task {
                 queryFromVehPassrec();
                 // System.out.println(datas.size());
                 // System.out.println(datas.toString());
-                for (Map<String, Object> data : datas) {
-                    //单条插入
-                    try {
-                        int count = insertToFlumeVehpass(data);
-                        System.out.println(count);
-                    } catch (SQLException e) {
-                        System.out.println("插入异常 : " + e);
+                try {
+                    long t2 = System.currentTimeMillis();
+                    insertToFlumeVehpassBatch(datas);
+                    System.out.println("批处理耗时:" + (System.currentTimeMillis() - t2) + "ms");
+                } catch (SQLException e) {
+                    for (Map<String, Object> data : datas) {
+                        //单条插入
+                        try {
+                            long t1 = System.currentTimeMillis();
+                            int count = insertToFlumeVehpass(data);
+                            System.out.println(count);
+                            System.out.println(System.currentTimeMillis() - t1);
+                        } catch (SQLException ex) {
+                            System.out.println("插入异常 : " + ex);
 
+                        }
                     }
                 }
-                //System.out.println(datas.size());
-                // System.out.println(datas);
 
                 startNum += insertNum;
                 endNum += insertNum;
@@ -123,25 +136,46 @@ public class Task {
             }
         }
 
+        private void insertToFlumeVehpassBatch(List<Map<String, Object>> datas) throws SQLException {
+            String insertSql = null;
+            if (datas != null) {
+                Map<String, Object> data = datas.get(0);
+                insertSql = getInsertSql(data);
+            }
+
+            try (
+                    Connection conn = ds.getConnection();
+                    PreparedStatement ps = conn.prepareStatement(insertSql)
+            ) {
+                for (Map<String, Object> data : datas) {
+                    setValues(ps, data);
+                    ps.addBatch();
+                }
+
+                ps.executeBatch();
+
+            }
+        }
+
+        private void setValues(PreparedStatement ps, Map<String, Object> data) throws SQLException {
+            int i = 0;
+            for (Object obj : data.values()) {
+                i++;
+                if (obj instanceof Date) {
+                    ps.setTimestamp(i, new Timestamp(((Date) obj).getTime()));
+                } else ps.setObject(i, obj);
+            }
+        }
+
+
         private int insertToFlumeVehpass(Map<String, Object> data) throws SQLException {
-            String fields = StringUtils.join(data.keySet(), ",");
-            String[] ss = new String[data.size()];
-            Arrays.fill(ss, "?");
-            String val = StringUtils.join(ss, ",");
-            final String preSql = "insert into " + targetTable + "(" + fields + ") values (" + val + ")";
-            System.out.println(preSql);
+            final String preSql = getInsertSql(data);
             int i;
             try (Connection conn = ds.getConnection();
                  PreparedStatement statement = conn.prepareStatement(preSql)
             ) {
-                int j = 0;
-                for (Object value : data.values()) {
-                    j++;
-                    if (value instanceof Date) {
-                        statement.setTimestamp(j, new Timestamp(((Date) value).getTime()));
-                    } else statement.setObject(j, value);
-                }
-                    i = statement.executeUpdate();
+                setValues(statement, data);
+                i = statement.executeUpdate();
             }
             return i;
         }
@@ -163,8 +197,8 @@ public class Task {
                 while (resultSet.next()) {
                     Map map = new HashMap();
                     for (int i = 1; i <= metaData.getColumnCount(); i++) {
-                         // System.out.println(metaData.getColumnName(i));
-                         // System.out.println(resultSet.getString(i));
+                        // System.out.println(metaData.getColumnName(i));
+                        // System.out.println(resultSet.getString(i));
                         //忽略rownum字段
                         if ("RN".equals(metaData.getColumnName(i))) continue;
 
@@ -183,3 +217,4 @@ public class Task {
 
     }
 }
+
